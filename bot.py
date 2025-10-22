@@ -192,17 +192,17 @@ def balance_per_month(query, year_data):
 PRESET_CATEGORIES = ['food', 'clothes', 'transport', 'coffee', 'salary', 'other']
 
 # Predefined bot commands
-async def set_bot_commands(application):
+def set_bot_commands(application):
     commands = [
         BotCommand("start", "Start a transaction"),
         BotCommand("stats", "Get statistics"),
         BotCommand("add", "Add a new record"),
         # Add more commands as needed
     ]
-    await application.bot.set_my_commands(commands)
+    return application.bot.set_my_commands(commands)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"Start command triggered by user {update.effective_user.id}, user_data: {context.user_data}")
+async def start_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"Start transaction command triggered by user {update.effective_user.id}, user_data: {context.user_data}")
     keyboard = [
         [InlineKeyboardButton('Add Expense', callback_data='start_expense'), InlineKeyboardButton('Add Income', callback_data='start_income')],
         [InlineKeyboardButton('Balance', callback_data='show_balance')],
@@ -438,7 +438,7 @@ def main():
 
     create_transactions = ConversationHandler(
         entry_points=[
-            CommandHandler('start', start, filters=filters.Regex('^/start$')),
+            CommandHandler('start', start_transaction, filters=filters.Regex('^/start$')),
         ],
         states={
             CATEGORY_SELECTION: [

@@ -20,13 +20,11 @@ class SheetsDatabase:
         # 2. Open the spreadsheet using its unique ID
         self.spreadsheet_id = SHEET_ID
         self.sh = self.gc.open_by_key(self.spreadsheet_id)
-    
-    def _get_worksheet(self, worksheet_name):
-        try:
-            return self.sh.worksheet(worksheet_name)
-        except gspread.WorksheetNotFound:
-            print(f"Error: Worksheet '{worksheet_name}' not found.")
-            return None
+
+        self.userWs = self.sh.worksheet('Users')
+        self.transWs = self.sh.worksheet('Transactions')
+        self.balWs = self.sh.worksheet('Balances')
+
 
     def get_all_data(self, worksheet_name='Sheet1'):
         """Retrieves all data from a specified worksheet as a list of dictionaries."""
@@ -42,21 +40,25 @@ class SheetsDatabase:
             print(f"An error occurred while fetching data: {e}")
             return []
 
-    def add_new_user(self, user_id, username, date):
-        """Appends a new row to the worksheet."""
-        worksheet = self.sh.worksheet('Users')
-        # Data to append (must be a list matching the column order)
+    def add_new_user(self, user_id, username):
+        """Appends a new row to Users DB"""
+        users_worksheet = self.userWs
+        bals_worksheet = self.balWs
+        date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Data to append 
         new_row = [user_id, username, date] 
-        if user_id in [user['User_ID'] for user in worksheet.get_all_records()]:
+        if user_id in [user['User_ID'] for user in users_worksheet.get_all_records()]:
             return False
         else:
-            worksheet.append_row(new_row)
+            users_worksheet.append_row(new_row)
+            bal_row = [user_id, 0.0, date, "", "", ""]
+            bals_worksheet.append_row(bal_row)
             return True
     
     def add_transaction(self, user_id, trans_type, amount, category, description):
         """Adds a transaction to the Transactions sheet."""
         transaction_id = generate_uuid_transaction()
-        worksheet = self._get_worksheet('Transactions')
+        worksheet = self.transWs
         date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         new_row = [transaction_id,
                     str(user_id),
@@ -66,20 +68,51 @@ class SheetsDatabase:
                     description,
                     amount]
         worksheet.append_row(new_row)
+
+        self.update_balance(user_id,transaction_id)
         return True
 
+    def update_balance(self, user_id, transaction_id = ""):
+        """Updates the balance for a user in the Balances sheet."""
+        worksheet = self.balWs
+        records = worksheet.get_all_records()
+        for idx, record in enumerate(records, start=2):  # start=2 to account for header row
+            if record['User_ID'] == user_id:
+                latest_balance = record.get('Latest_1 Transaction_ID', "")
+                latest_balance_2 = record.get('Latest_2 Transaction_ID',"")
+
+                balance = self.calculate_balance(user_id)
+                worksheet.update_cell(idx, 2, balance)
+                if transaction_id == "":
+                    break
+                worksheet.update_cell(idx, 5, latest_balance_2)
+                worksheet.update_cell(idx, 4, latest_balance)
+                worksheet.update_cell(idx, 3, transaction_id) 
+                break
+    
     def calculate_balance(self, user_id):
         """Calculates the current balance for a user."""
-        worksheet = self.sh.worksheet('Transactions')
+        worksheet = self.transWs
         records = worksheet.get_all_records()
         balance = 0
         for record in records:
-            if record['user_id'] == user_id:
-                if record['type'] == 'income':
-                    balance += float(record['amount'])
-                elif record['type'] == 'expense':
-                    balance -= float(record['amount'])
+            if record['User_ID'] == user_id:
+                type = record['Type']
+                if type == 'income':
+                    balance += float(record.get('Amount',0))
+                elif type == 'expense':
+                    balance -= float(record.get('Amount',0))
         return balance
+    
+    def get_balance(self, user_id):
+        """Fetches the current balance for a user."""
+        worksheet = self.balWs
+        records = worksheet.get_all_records()
+        self.update_balance(user_id)
+        for record in records:
+            if record['User_ID'] == user_id:
+                return record['Balance']
+        return 0.0
 
     def get_monthly_stats(self, user_id, month):
         """Fetches monthly statistics for a user."""

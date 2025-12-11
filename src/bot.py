@@ -44,22 +44,17 @@ RECORD_TYPE, SELECT_DATE, AMOUNT = range(3)
 # def year_breakdown(query, year_data):
 # def balance_per_month(query, year_data):
 
+def add_new_user(user_id, username):
+    return db.add_new_user(user_id, username)
 
-def add_transaction(user_id, trans_type, amount, category):
-    date = datetime.now().strftime('%Y-%m-%d')
-    # cursor.execute('INSERT INTO transactions (user_id, type, amount, category, date) VALUES (?, ?, ?, ?, ?)',
-    #               (user_id, trans_type, amount, category, date))
-    # conn.commit()
-    db.add_transaction_to_sheet(user_id, trans_type, amount, category, date, description='')
-    logger.info(f"Added transaction: User {user_id}, Type {trans_type}, Amount {amount}, Category {category}, Date {date}")
+def add_transaction(user_id, trans_type, amount, category, description=''):
+    db.add_transaction(user_id, trans_type, amount, category, description)
+    logger.info(f"Added transaction: User {user_id}, Type {trans_type}, Amount {amount}, Category {category}")
     return True
 
 
 def get_balance(user_id):
-    # cursor.execute('SELECT SUM(CASE WHEN type="income" THEN amount ELSE -amount END) FROM transactions WHERE user_id=?', (user_id,))
-    # result = cursor.fetchone()[0] or 0
-    # return result
-    balance = db.calculate_balance(user_id)
+    balance = db.get_balance(user_id)
     logger.info(f"Calculated balance for user {user_id}: {balance}")
     return balance
 
@@ -123,13 +118,14 @@ def month_overall(query, month_data):
 def month_breakdown(query, month_data):
     month = int(month_data.split(':', 1)[1])
     user_id = query.from_user.id
-    cursor.execute('''
-        SELECT category, SUM(amount) FROM transactions
-        WHERE user_id=? AND strftime('%m', date)=? AND type="expense"
-        GROUP BY category
-        ORDER BY SUM(amount) DESC
-    ''', (user_id, f'{month:02}'))
-    results = cursor.fetchall()
+    # cursor.execute('''
+    #     SELECT category, SUM(amount) FROM transactions
+    #     WHERE user_id=? AND strftime('%m', date)=? AND type="expense"
+    #     GROUP BY category
+    #     ORDER BY SUM(amount) DESC
+    # ''', (user_id, f'{month:02}'))
+    # results = cursor.fetchall()
+    results = db.get_monthly_category_breakdown(user_id, month)
     breakdown = "Expense Breakdown:\n"
     for category, amount in results:
         breakdown += f'  {category}: ${amount:.2f}\n'
@@ -139,12 +135,13 @@ def month_breakdown(query, month_data):
 def year_overall(query, year_data):
     year = int(year_data.split(':', 1)[1])
     user_id = query.from_user.id
-    cursor.execute('''
-        SELECT type, SUM(amount) FROM transactions
-        WHERE user_id=? AND strftime('%Y', date)=?
-        GROUP BY type
-    ''', (user_id, str(year)))
-    results = cursor.fetchall()
+    # cursor.execute('''
+    #     SELECT type, SUM(amount) FROM transactions
+    #     WHERE user_id=? AND strftime('%Y', date)=?
+    #     GROUP BY type
+    # ''', (user_id, str(year)))
+    # results = cursor.fetchall()
+    results = db.get_yearly_stats(user_id, year)
     income = sum(amount for t_type, amount in results if t_type == 'income')
     expense = sum(amount for t_type, amount in results if t_type == 'expense')
     logger.info(f"Yearly stats for user {user_id} for year {year}: Income={income}, Expense={expense}")
@@ -153,13 +150,14 @@ def year_overall(query, year_data):
 def year_breakdown(query, year_data):
     year = int(year_data.split(':', 1)[1])
     user_id = query.from_user.id
-    cursor.execute('''
-        SELECT category, SUM(amount) FROM transactions
-        WHERE user_id=? AND strftime('%Y', date)=? AND type="expense"
-        GROUP BY category
-        ORDER BY SUM(amount) DESC
-    ''', (user_id, str(year)))
-    results = cursor.fetchall()
+    # cursor.execute('''
+    #     SELECT category, SUM(amount) FROM transactions
+    #     WHERE user_id=? AND strftime('%Y', date)=? AND type="expense"
+    #     GROUP BY category
+    #     ORDER BY SUM(amount) DESC
+    # ''', (user_id, str(year)))
+    # results = cursor.fetchall()
+    results = db.get_yearly_category_breakdown(user_id, year)
     breakdown = "Expense Breakdown:\n"
     for category, amount in results:
         breakdown += f'  {category}: ${amount:.2f}\n'
@@ -170,16 +168,16 @@ def balance_per_month(query, year_data):
     year = int(year_data.split(':', 1)[1])
     user_id = query.from_user.id
     
-    cursor.execute('''
-        SELECT strftime('%m', date) AS month, 
-               SUM(CASE WHEN type="income" THEN amount ELSE -amount END) AS balance
-        FROM transactions
-        WHERE user_id=? AND strftime('%Y', date)=?
-        GROUP BY month
-        ORDER BY month
-    ''', (user_id, str(year)))
-    results = cursor.fetchall()
-    
+    # cursor.execute('''
+    #     SELECT strftime('%m', date) AS month, 
+    #            SUM(CASE WHEN type="income" THEN amount ELSE -amount END) AS balance
+    #     FROM transactions
+    #     WHERE user_id=? AND strftime('%Y', date)=?
+    #     GROUP BY month
+    #     ORDER BY month
+    # ''', (user_id, str(year)))
+    # results = cursor.fetchall()
+    results = db.get_balance_per_month(user_id, year)
     if not results:
         return "No transactions recorded for this year."
     
@@ -219,7 +217,7 @@ def set_bot_commands(application):
 
 async def start_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Start transaction command triggered by user {update.effective_user.id}, user_data: {context.user_data}")
-    db.add_new_user(update.effective_user.id, update.effective_user.username, datetime.now().strftime('%Y-%m-%d'))
+    add_new_user(update.effective_user.id, update.effective_user.username)
     keyboard = [
         [InlineKeyboardButton('Add Expense', callback_data='start_expense'), InlineKeyboardButton('Add Income', callback_data='start_income')],
         [InlineKeyboardButton('Balance', callback_data='show_balance')],
@@ -289,7 +287,7 @@ async def amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
             final_category = category if category else "Salary"
             final_description = description if description else "Income"
             
-            db.add_transaction(user_id, trans_type, amount, final_category, final_description) 
+            add_transaction(user_id, trans_type, amount, final_category, final_description) 
             await update.message.reply_text(f'✅ Added income: **${amount:.2f}** ({final_category})')
             
         # 2. Expense flow 
@@ -300,7 +298,7 @@ async def amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return ConversationHandler.END 
             
             # Final Database write for Expense
-            db.add_transaction(user_id, trans_type, amount, category, description)
+            add_transaction(user_id, trans_type, amount, category, description)
             await update.message.reply_text(f'✅ Added expense: ${amount:.2f} for {category} \n> {description}')
             
         context.user_data.clear()

@@ -1,10 +1,12 @@
 import os
 import re
-from config import TELEGRAM_API_TOKEN
+from .config import TELEGRAM_API_TOKEN, GSPREAD_SHEET_CREDENTIALS, SHEET_ID
+from .sheets_db import SheetsDatabase
+
+import sqlite3
 
 import asyncio
 import logging
-import sqlite3
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
@@ -21,38 +23,45 @@ from telegram.ext import (
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# SQLite setup
-conn = sqlite3.connect('finances.db', check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS transactions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        type TEXT,
-        amount REAL,
-        category TEXT,
-        date TEXT
-    )
-''')
-conn.commit()
+# Google Sheets setup
+db = SheetsDatabase()
 
 # Conversation states
-CATEGORY_SELECTION, AMOUNT = range(2)
+CATEGORY_SELECTION, TRANSACTION_DESCRIPTION, AMOUNT  = range(3)
 STAT_TYPE, YEARLY_STATS, MONTHLY_STATS, SELECT_PERIOD, DATA_DISPLAY = range(5)
 RECORD_TYPE, SELECT_DATE, AMOUNT = range(3)
 
 
 # Helper functions
+# def add_transaction(user_id, trans_type, amount, category):
+# def get_balance(user_id):
+# def expenses_category():
+# def months():
+# def years():
+# def month_overall(query, month_data):
+# def month_breakdown(query, month_data):
+# def year_overall(query, year_data):
+# def year_breakdown(query, year_data):
+# def balance_per_month(query, year_data):
+
+
 def add_transaction(user_id, trans_type, amount, category):
     date = datetime.now().strftime('%Y-%m-%d')
-    cursor.execute('INSERT INTO transactions (user_id, type, amount, category, date) VALUES (?, ?, ?, ?, ?)',
-                  (user_id, trans_type, amount, category, date))
-    conn.commit()
+    # cursor.execute('INSERT INTO transactions (user_id, type, amount, category, date) VALUES (?, ?, ?, ?, ?)',
+    #               (user_id, trans_type, amount, category, date))
+    # conn.commit()
+    db.add_transaction_to_sheet(user_id, trans_type, amount, category, date, description='')
+    logger.info(f"Added transaction: User {user_id}, Type {trans_type}, Amount {amount}, Category {category}, Date {date}")
+    return True
+
 
 def get_balance(user_id):
-    cursor.execute('SELECT SUM(CASE WHEN type="income" THEN amount ELSE -amount END) FROM transactions WHERE user_id=?', (user_id,))
-    result = cursor.fetchone()[0] or 0
-    return result
+    # cursor.execute('SELECT SUM(CASE WHEN type="income" THEN amount ELSE -amount END) FROM transactions WHERE user_id=?', (user_id,))
+    # result = cursor.fetchone()[0] or 0
+    # return result
+    balance = db.calculate_balance(user_id)
+    logger.info(f"Calculated balance for user {user_id}: {balance}")
+    return balance
 
 def expenses_category():
     buttons = []
@@ -91,16 +100,23 @@ def years():
     return buttons
 
 def month_overall(query, month_data):
+    # month = int(month_data.split(':', 1)[1])
+    # user_id = query.from_user.id
+    # cursor.execute('''
+    #     SELECT type, SUM(amount) FROM transactions
+    #     WHERE user_id=? AND strftime('%m', date)=?
+    #     GROUP BY type
+    # ''', (user_id, f'{month:02}'))
+    # results = cursor.fetchall()
+    # income = sum(amount for t_type, amount in results if t_type == 'income')
+    # expense = sum(amount for t_type, amount in results if t_type == 'expense')
+    # logger.info(f"Monthly stats for user {user_id} for month {month}: Income={income}, Expense={expense}")
+    # return f'Statistics for {datetime(1900, month, 1).strftime("%B")}:\n  Income: ${income:.2f}\n  Expenses: ${expense:.2f}\n  Net: ${income - expense:.2f}'
     month = int(month_data.split(':', 1)[1])
     user_id = query.from_user.id
-    cursor.execute('''
-        SELECT type, SUM(amount) FROM transactions
-        WHERE user_id=? AND strftime('%m', date)=?
-        GROUP BY type
-    ''', (user_id, f'{month:02}'))
-    results = cursor.fetchall()
-    income = sum(amount for t_type, amount in results if t_type == 'income')
-    expense = sum(amount for t_type, amount in results if t_type == 'expense')
+    results = db.get_monthly_stats(user_id, month)
+    income = results.get('income', 0)
+    expense = results.get('expense', 0)
     logger.info(f"Monthly stats for user {user_id} for month {month}: Income={income}, Expense={expense}")
     return f'Statistics for {datetime(1900, month, 1).strftime("%B")}:\n  Income: ${income:.2f}\n  Expenses: ${expense:.2f}\n  Net: ${income - expense:.2f}'
 
@@ -203,12 +219,13 @@ def set_bot_commands(application):
 
 async def start_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Start transaction command triggered by user {update.effective_user.id}, user_data: {context.user_data}")
+    db.add_new_user(update.effective_user.id, update.effective_user.username, datetime.now().strftime('%Y-%m-%d'))
     keyboard = [
         [InlineKeyboardButton('Add Expense', callback_data='start_expense'), InlineKeyboardButton('Add Income', callback_data='start_income')],
         [InlineKeyboardButton('Balance', callback_data='show_balance')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text('Welcome! Use the buttons below to log transactions or view your balance.', reply_markup=reply_markup)
+    await update.message.reply_text(f'Welcome @{update.effective_user.username}! Use the buttons below to log transactions or view your balance.', reply_markup=reply_markup)
     return CATEGORY_SELECTION
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -261,25 +278,44 @@ async def amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         trans_type = context.user_data.get('trans_type')
         category = context.user_data.get('category')
+        description = context.user_data.get('description', '') 
+        
         if amount <= 0:
-            await update.message.reply_text('Amount must be positive. Please enter a valid amount:')
+            await update.message.reply_text('❌ Amount must be positive. Please enter a valid amount:')
             return AMOUNT
-        if context.user_data['trans_type'] == 'income':
-            add_transaction(user_id, trans_type, amount, "Salary")
-            await update.message.reply_text(f'Added income: ${amount}')
-            context.user_data.clear()
-            return ConversationHandler.END
-        if not category:
-            logger.warning(f"Category missing for user {update.effective_user.id}")
-            await update.message.reply_text('Category missing. Please start again with /start and pick a category.')
-            return ConversationHandler.END
-        add_transaction(user_id, trans_type, amount, category)
-        await update.message.reply_text(f'Added {trans_type}: ${amount} under {category}')
+            
+        # 1. Income flow
+        if trans_type == 'income':
+            final_category = category if category else "Salary"
+            final_description = description if description else "Income"
+            
+            db.add_transaction(user_id, trans_type, amount, final_category, final_description) 
+            await update.message.reply_text(f'✅ Added income: **${amount:.2f}** ({final_category})')
+            
+        # 2. Expense flow 
+        elif trans_type == 'expense':
+            if not category:
+                logger.warning(f"Required fields missing for expense for user {user_id}")
+                await update.message.reply_text('❌ Missing category. Please try again.')
+                return ConversationHandler.END 
+            
+            # Final Database write for Expense
+            db.add_transaction(user_id, trans_type, amount, category, description)
+            await update.message.reply_text(f'✅ Added expense: ${amount:.2f} for {category} \n> {description}')
+            
         context.user_data.clear()
         return ConversationHandler.END
+        
     except ValueError:
-        await update.message.reply_text('Invalid amount. Please enter a numeric amount (e.g., 12.50):')
+        await update.message.reply_text('❌ Invalid amount. Please enter a numeric amount (e.g., 12.50):')
         return AMOUNT
+    
+async def transaction_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"Transaction description handler called with message: {update.message.text} for user {update.effective_user.id}, state: {context.user_data.get('__CONVERSATION_STATE')}")
+    description = update.message.text.strip()
+    context.user_data['description'] = description
+    await update.message.reply_text('✅ Description saved. \n Please enter the amount:')
+    return AMOUNT
 
 async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -287,16 +323,16 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     logger.info(f"Category callback received: {data} for user {query.from_user.id}, user_data: {context.user_data}")
     if not data.startswith('cat:'):
-        await query.message.reply_text('Unknown selection.')
+        await query.message.reply_text('❌ Unknown selection.')
         return ConversationHandler.END
     sel = data.split(':', 1)[1]
     if sel == 'custom':
         await query.message.reply_text('Please type the category name you want to use:')
         return CATEGORY_SELECTION
     context.user_data['category'] = sel
-    await query.message.reply_text(f'Category selected: {sel}. Now please enter the amount:')
-    logger.info(f"Transitioning to AMOUNT state with category: {sel} for user {query.from_user.id}")
-    return AMOUNT
+    await query.message.reply_text(f'Category selected: {sel}. \n   Now enter a short description:')
+    logger.info(f"Transitioning to TRANSACTION_DESCRIPTION state with category: {sel} for user {query.from_user.id}")
+    return TRANSACTION_DESCRIPTION
 
 async def custom_category_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cat = update.message.text.strip()
@@ -304,8 +340,8 @@ async def custom_category_text(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text('Category cannot be empty. Please enter a category:')
         return CATEGORY_SELECTION
     context.user_data['category'] = cat
-    await update.message.reply_text(f'Category set to: {cat}. Now enter the amount:')
-    return AMOUNT
+    await update.message.reply_text(f'Category set to: {cat}. Now enter a short description:')
+    return TRANSACTION_DESCRIPTION
 
 
 # Stats commands
@@ -421,6 +457,8 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def debug_state(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.debug(f"Current conversation state for user {update.effective_user.id}: {context.user_data.get('__CONVERSATION_STATE')}, user_data: {context.user_data}")
+    if update.message == "/start":
+        return start_transaction(Update, ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(f"Please use /start to begin")
     return None
 
@@ -447,10 +485,13 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, custom_category_text),
                 MessageHandler(filters.ALL, debug_state),
             ],
-            AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, amount),
+            TRANSACTION_DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, transaction_description),
                 MessageHandler(filters.ALL, debug_state),
             ],
+            AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, amount),
+            ]
         },
         fallbacks=[CommandHandler('cancel', cancel, filters=filters.Regex('^/cancel$'))],
     )

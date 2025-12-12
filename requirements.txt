@@ -1,4 +1,6 @@
 python-telegram-bot
 python-dotenv
-gspread
+gspread # Required for Google Sheets integration
 pandas
+flask  # Required for the web server
+gunicorn # Recommended WSGI server for production deployments like Render

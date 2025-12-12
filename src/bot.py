@@ -256,7 +256,7 @@ async def start_transaction_callback(update: Update, context: ContextTypes.DEFAU
         return AMOUNT
     elif data == 'show_balance':
         bal = get_balance(query.from_user.id)
-        await query.message.reply_text(f'Current balance: ${bal:.2f}')
+        await query.message.reply_text(f"Current balance: {bal}")
         return ConversationHandler.END
     return ConversationHandler.END
 

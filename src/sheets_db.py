@@ -115,8 +115,14 @@ class SheetsDatabase:
         return 0.0
 
     def get_monthly_stats(self, user_id, month):
-        """Fetches monthly statistics for a user."""
-        # Implementation goes here
+        worksheet = self.transWs
+        records = worksheet.get_all_records()
+        records_filtered = [rec for rec in records if rec.get('User_ID') == user_id and rec.get('Date').startswith(month)]
+        income = sum(rec.get('Amount',0) for rec in records_filtered if rec.get('Type') == 'income')
+        expense = sum(rec.get('Amount',0) for rec in records_filtered if rec.get('Type') == 'expense')
+        
+        results = {'income': income, 'expense': expense}
+        return results
         pass
 
     def get_monthly_breakdown(self, user_id, month):

@@ -117,13 +117,12 @@ class SheetsDatabase:
     def get_monthly_stats(self, user_id, month):
         worksheet = self.transWs
         records = worksheet.get_all_records()
-        records_filtered = [rec for rec in records if rec.get('User_ID') == user_id and rec.get('Date').startswith(month)]
-        income = sum(rec.get('Amount',0) for rec in records_filtered if rec.get('Type') == 'income')
-        expense = sum(rec.get('Amount',0) for rec in records_filtered if rec.get('Type') == 'expense')
+        records_filtered = [rec for rec in records if rec.get('User_ID') == user_id and str(rec.get('Date')).startswith(str(month))]
+        income = sum(float(rec.get('Amount',0)) for rec in records_filtered if rec.get('Type') == 'income')
+        expense = sum(float(rec.get('Amount',0)) for rec in records_filtered if rec.get('Type') == 'expense')
         
         results = {'income': income, 'expense': expense}
         return results
-        pass
 
     def get_monthly_breakdown(self, user_id, month):
         """Fetches monthly breakdown by category for a user."""

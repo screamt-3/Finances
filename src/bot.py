@@ -481,7 +481,7 @@ def main():
                 CallbackQueryHandler(start_transaction_callback, pattern='^(start_|show_balance)'),
                 CallbackQueryHandler(category_callback, pattern='^cat:'),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, custom_category_text),
-                MessageHandler(filters.ALL, debug_state),
+                MessageHandler(filters.ALL, start_transaction)
             ],
             TRANSACTION_DESCRIPTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, transaction_description),
